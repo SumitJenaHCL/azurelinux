@@ -12,6 +12,7 @@ type Storage struct {
 	BootType                 BootType                 `yaml:"bootType"`
 	Disks                    []Disk                   `yaml:"disks"`
 	FileSystems              []FileSystem             `yaml:"filesystems"`
+	Verity                   []Verity                 `yaml:"verity"`
 }
 
 func (s *Storage) IsValid() error {
@@ -54,10 +55,22 @@ func (s *Storage) IsValid() error {
 		fileSystemSet[fileSystem.DeviceId] = fileSystem
 	}
 
+	if len(s.Verity) > 1 {
+		return fmt.Errorf("defining multiple verity devices is not currently supported")
+	}
+
+	for i, verity := range s.Verity {
+		err = verity.IsValid()
+		if err != nil {
+			return fmt.Errorf("invalid verity item at index %d:\n%w", i, err)
+		}
+	}
+
 	hasResetUuids := s.ResetPartitionsUuidsType != ResetPartitionsUuidsTypeDefault
 	hasBootType := s.BootType != BootTypeNone
 	hasDisks := len(s.Disks) > 0
 	hasFileSystems := len(s.FileSystems) > 0
+	hasVerity := len(s.Verity) > 0
 
 	if hasResetUuids && hasDisks {
 		return fmt.Errorf("cannot specify both 'resetPartitionsUuidsType' and 'disks'")
@@ -73,6 +86,10 @@ func (s *Storage) IsValid() error {
 
 	if hasFileSystems && !hasDisks {
 		return fmt.Errorf("cannot specify 'filesystems' without specifying 'disks'")
+	}
+
+	if hasVerity && !hasDisks {
+		return fmt.Errorf("cannot specify 'verity' without specifying 'disks'")
 	}
 
 	partitionSet := make(map[string]Partition)
@@ -125,6 +142,31 @@ func (s *Storage) IsValid() error {
 		}
 	}
 
+	veritySet := make(map[string]Verity)
+	for i, verity := range s.Verity {
+		if _, existingName := partitionSet[verity.Id]; existingName {
+			return fmt.Errorf("invalid verity item at index %d:\nid (%s) conflicts with partition id", i, verity.Id)
+		}
+
+		if _, existingName := veritySet[verity.Id]; existingName {
+			return fmt.Errorf("invalid verity item at index %d:\nduplicate id used (%s)", i, verity.Id)
+		}
+
+		veritySet[verity.Id] = verity
+
+		_, foundDataPartition := partitionSet[verity.DataDeviceId]
+		if !foundDataPartition {
+			return fmt.Errorf("invalid verity at index %d:\nno partition with matching ID (%s)", i,
+				verity.DataDeviceId)
+		}
+
+		_, foundHashPartition := partitionSet[verity.HashDeviceId]
+		if !foundHashPartition {
+			return fmt.Errorf("invalid verity at index %d:\nno partition with matching ID (%s)", i,
+				verity.HashDeviceId)
+		}
+	}
+
 	// Ensure the correct partitions exist to support the specified the boot type.
 	switch s.BootType {
 	case BootTypeEfi:
@@ -140,10 +182,17 @@ func (s *Storage) IsValid() error {
 
 	// Ensure all the filesystems objects have an equivalent partition object.
 	for i, fileSystem := range s.FileSystems {
-		partition, found := partitionSet[fileSystem.DeviceId]
-		if !found {
-			return fmt.Errorf("invalid fileSystem at index %d:\nno partition with matching ID (%s)", i,
+		partition, foundPartition := partitionSet[fileSystem.DeviceId]
+		verity, foundVerity := veritySet[fileSystem.DeviceId]
+		if !foundPartition && !foundVerity {
+			return fmt.Errorf("invalid fileSystem at index %d:\nno partition or verity with matching ID (%s)", i,
 				fileSystem.DeviceId)
+		}
+
+		if foundVerity {
+			// The filesystem's mount settings apply to verity data partition.
+			// TODO: It doesn't make sense to reference verity partition by label because it is linked to hash.
+			partition = partitionSet[verity.DataDeviceId]
 		}
 
 		if fileSystem.MountPoint != nil && fileSystem.MountPoint.IdType == MountIdentifierTypePartLabel {
@@ -157,6 +206,16 @@ func (s *Storage) IsValid() error {
 				return fmt.Errorf("invalid fileSystem at index %d:\nmore than one partition has a label of (%s)", i,
 					partition.Label)
 			}
+		}
+
+		isRootfs := fileSystem.MountPoint != nil && fileSystem.MountPoint.Path == "/"
+
+		if foundVerity && !isRootfs {
+			return fmt.Errorf("defining secondary verity devices is not currently supported:\n'filesystems[].mountPoint.path' of data partition must be set to '/'")
+		}
+
+		if foundVerity && isRootfs && verity.Name != VerityRootDevicePath {
+			return fmt.Errorf("verity 'name' value (%s) for root filesystem (/) must be 'root'", verity.Name)
 		}
 	}
 

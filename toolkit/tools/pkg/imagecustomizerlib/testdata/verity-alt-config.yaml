@@ -14,10 +14,12 @@ storage:
       end: 1024M
 
     - id: root
+      label: root
       start: 1024M
       end: 3072M
 
-    - id: roothash
+    - id: verityhash
+      label: root-hash
       start: 3072M
       end: 3200M
 
@@ -43,7 +45,7 @@ storage:
     mountPoint:
       path: /boot
 
-  - deviceId: root
+  - deviceId: verityroot
     type: ext4
     mountPoint:
       path: /

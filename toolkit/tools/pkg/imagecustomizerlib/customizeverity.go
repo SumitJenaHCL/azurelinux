@@ -63,7 +63,7 @@ func updateFstabForVerity(imageChroot *safechroot.Chroot) error {
 	for _, entry := range fstabEntries {
 		if entry.Target == "/" {
 			// Replace existing root partition line with the Verity target.
-			entry.Source = "/dev/mapper/root"
+			entry.Source = imagecustomizerapi.VerityRootDevicePath
 			entry.Options = "ro," + entry.Options
 		}
 		updatedEntries = append(updatedEntries, entry)
@@ -142,12 +142,13 @@ func updateGrubConfigForVerity(verity *imagecustomizerapi.Verity, rootHash strin
 	}
 
 	if grubMkconfigEnabled {
-		grub2Config, err = updateKernelCommandLineArgs(grub2Config, []string{"root"}, []string{"root=/dev/mapper/root"})
+		grub2Config, err = updateKernelCommandLineArgs(grub2Config, []string{"root"},
+			[]string{"root=" + imagecustomizerapi.VerityRootDevicePath})
 		if err != nil {
 			return fmt.Errorf("failed to set verity root command-line arg:\n%w", err)
 		}
 	} else {
-		grub2Config, err = replaceSetCommandValue(grub2Config, "rootdevice", "/dev/mapper/root")
+		grub2Config, err = replaceSetCommandValue(grub2Config, "rootdevice", imagecustomizerapi.VerityRootDevicePath)
 		if err != nil {
 			return fmt.Errorf("failed to set verity root device:\n%w", err)
 		}
